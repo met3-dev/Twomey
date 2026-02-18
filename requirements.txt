@@ -1,0 +1,4 @@
+anthropic
+mem0ai
+pyairtable
+python-dotenv
