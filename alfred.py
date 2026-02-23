@@ -137,21 +137,13 @@ def recall_memories(query: str, user_id: str = DEFAULT_USER) -> str:
 
 def store_memory(conversation: list, user_id: str = DEFAULT_USER):
     """Store conversation in memory for future recall."""
-    print(f"\n🔍 [MEM DEBUG] store_memory called for user_id='{user_id}'")
-    print(f"🔍 [MEM DEBUG] messages being stored: {conversation}")
     try:
-        result = memory.add(
+        memory.add(
             messages=conversation,
             user_id=user_id,
         )
-        print(f"🔍 [MEM DEBUG] memory.add() returned: {result}")
-        # Verify it actually landed
-        all_mems = memory.get_all(user_id=user_id)
-        print(f"🔍 [MEM DEBUG] memory.get_all() after add: {all_mems}")
     except Exception as e:
-        import traceback
-        print(f"⚠️  Memory storage error: {e}")
-        print(f"🔍 [MEM DEBUG] traceback:\n{traceback.format_exc()}")
+        print(f"⚠️  Memory storage note: {e}")
 
 
 # ─── Conversation Engine ─────────────────────────────────────
