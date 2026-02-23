@@ -36,6 +36,7 @@ def _local_mem0_config(anthropic_api_key: str) -> dict:
                 "model": "claude-haiku-4-5-20251001",
                 "api_key": anthropic_api_key,
                 "max_tokens": 2000,
+                "temperature": 0,
             },
         },
         "embedder": {
