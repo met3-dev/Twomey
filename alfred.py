@@ -6,10 +6,10 @@ import anthropic
 import os
 import datetime
 
-# ─── Mem0 Patch ───────────────────────────────────────────────
-# Mem0's AnthropicLLM always passes both temperature and top_p, which
-# causes a 400 error from the Anthropic API. Patch _get_common_params
-# to strip top_p before the API call.
+# ─── Mem0 Patches ─────────────────────────────────────────────
+# Patch 1: Mem0's AnthropicLLM always passes both temperature and top_p,
+# which causes a 400 error from the Anthropic API. Strip top_p before
+# the API call.
 _original_get_common_params = AnthropicLLM._get_common_params
 
 def _patched_get_common_params(self, **kwargs):
@@ -18,6 +18,46 @@ def _patched_get_common_params(self, **kwargs):
     return params
 
 AnthropicLLM._get_common_params = _patched_get_common_params
+
+# Patch 2: Local Qdrant doesn't support payload indexes, so filtered
+# scroll() calls (e.g. filtering by user_id) silently return no results.
+# Patch list() and search() to fetch all points then filter in Python.
+from mem0.vector_stores.qdrant import Qdrant as QdrantStore
+from qdrant_client.models import FieldCondition, MatchValue
+
+_original_qdrant_list = QdrantStore.list
+_original_qdrant_search = QdrantStore.search
+
+def _patched_qdrant_list(self, filters: dict = None, limit: int = 100):
+    if not self.is_local or not filters:
+        return _original_qdrant_list(self, filters=filters, limit=limit)
+    # Fetch all points unfiltered, then filter payloads in Python
+    result = self.client.scroll(
+        collection_name=self.collection_name,
+        limit=limit,
+        with_payload=True,
+        with_vectors=False,
+    )
+    points, _ = result
+    return [p for p in points if all(
+        p.payload.get(k) == v for k, v in filters.items()
+    )], None
+
+def _patched_qdrant_search(self, query: str, vectors: list, limit: int = 5, filters: dict = None):
+    if not self.is_local or not filters:
+        return _original_qdrant_search(self, query=query, vectors=vectors, limit=limit, filters=filters)
+    # Search without filter, then filter results in Python
+    hits = self.client.query_points(
+        collection_name=self.collection_name,
+        query=vectors,
+        limit=limit * 4,  # over-fetch to compensate for post-filter
+    )
+    return [h for h in hits.points if all(
+        h.payload.get(k) == v for k, v in filters.items()
+    )][:limit]
+
+QdrantStore.list = _patched_qdrant_list
+QdrantStore.search = _patched_qdrant_search
 
 # ─── Environment ───────────────────────────────────────────────
 load_dotenv()
