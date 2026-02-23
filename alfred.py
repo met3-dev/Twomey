@@ -46,11 +46,12 @@ def _patched_qdrant_list(self, filters: dict = None, limit: int = 100):
 def _patched_qdrant_search(self, query: str, vectors: list, limit: int = 5, filters: dict = None):
     if not self.is_local or not filters:
         return _original_qdrant_search(self, query=query, vectors=vectors, limit=limit, filters=filters)
-    # Search without filter, then filter results in Python
+    # Fetch all points by score (no Qdrant filter), then Python-filter by user_id etc.
+    # Use a large fetch limit so we don't miss relevant results after filtering.
     hits = self.client.query_points(
         collection_name=self.collection_name,
         query=vectors,
-        limit=limit * 4,  # over-fetch to compensate for post-filter
+        limit=1000,
     )
     return [h for h in hits.points if all(
         h.payload.get(k) == v for k, v in filters.items()
@@ -164,12 +165,18 @@ def recall_memories(query: str, user_id: str = DEFAULT_USER) -> str:
     results = memory.search(query=query, user_id=user_id)
     if not results:
         return "No relevant memories found."
+    # results is a dict with a "results" key (v1.1 API)
+    items = results.get("results", []) if isinstance(results, dict) else results
+    if not items:
+        return "No relevant memories found."
     memories = []
-    for r in results:
+    for r in items:
         if isinstance(r, dict) and "memory" in r:
             memories.append(f"- {r['memory']}")
         elif isinstance(r, dict) and "text" in r:
             memories.append(f"- {r['text']}")
+        elif hasattr(r, "payload"):
+            memories.append(f"- {r.payload.get('data', str(r))}")
         else:
             memories.append(f"- {str(r)}")
     return "\n".join(memories)
@@ -178,12 +185,16 @@ def recall_memories(query: str, user_id: str = DEFAULT_USER) -> str:
 def store_memory(conversation: list, user_id: str = DEFAULT_USER):
     """Store conversation in memory for future recall."""
     try:
-        memory.add(
+        result = memory.add(
             messages=conversation,
             user_id=user_id,
         )
+        stored = result.get("results", []) if isinstance(result, dict) else []
+        if stored:
+            print(f"💾 Stored {len(stored)} new memory item(s).")
     except Exception as e:
-        print(f"⚠️  Memory storage note: {e}")
+        import traceback
+        print(f"⚠️  Memory storage error: {e}\n{traceback.format_exc()}")
 
 
 # ─── Conversation Engine ─────────────────────────────────────
