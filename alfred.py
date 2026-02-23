@@ -1,9 +1,23 @@
 from pathlib import Path
 from dotenv import load_dotenv
 from mem0 import Memory
+from mem0.llms.anthropic import AnthropicLLM
 import anthropic
 import os
 import datetime
+
+# ─── Mem0 Patch ───────────────────────────────────────────────
+# Mem0's AnthropicLLM always passes both temperature and top_p, which
+# causes a 400 error from the Anthropic API. Patch _get_common_params
+# to strip top_p before the API call.
+_original_get_common_params = AnthropicLLM._get_common_params
+
+def _patched_get_common_params(self, **kwargs):
+    params = _original_get_common_params(self, **kwargs)
+    params.pop("top_p", None)
+    return params
+
+AnthropicLLM._get_common_params = _patched_get_common_params
 
 # ─── Environment ───────────────────────────────────────────────
 load_dotenv()
