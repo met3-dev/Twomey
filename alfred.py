@@ -5,6 +5,7 @@ from mem0.llms.anthropic import AnthropicLLM
 import anthropic
 import os
 import datetime
+import json
 
 # ─── Mem0 Patches ─────────────────────────────────────────────
 # Patch 1: Mem0's AnthropicLLM always passes both temperature and top_p,
@@ -63,6 +64,7 @@ QdrantStore.search = _patched_qdrant_search
 # ─── Environment ───────────────────────────────────────────────
 load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 if not ANTHROPIC_API_KEY:
     raise EnvironmentError("ANTHROPIC_API_KEY not found in .env")
@@ -121,6 +123,67 @@ memory = Memory.from_config(_local_mem0_config(ANTHROPIC_API_KEY))
 client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 print("✅ Memory systems online.\n")
 
+# ─── Tavily Web Search ───────────────────────────────────────
+TAVILY_TOOL = {
+    "name": "web_search",
+    "description": (
+        "Search the internet for current information. Use this when the user asks "
+        "about recent events, current prices, news, weather, sports scores, or "
+        "anything that requires up-to-date information beyond your training data."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query to look up.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Number of results to return (1-10). Default is 5.",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+def web_search(query: str, max_results: int = 5) -> str:
+    """Run a Tavily search and return formatted results."""
+    if not TAVILY_API_KEY:
+        return "Web search is unavailable — TAVILY_API_KEY is not set."
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "api_key": TAVILY_API_KEY,
+            "query": query,
+            "max_results": max_results,
+            "include_answer": True,
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.tavily.com/search",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+
+        lines = []
+        if data.get("answer"):
+            lines.append(f"Summary: {data['answer']}\n")
+        for i, r in enumerate(data.get("results", []), 1):
+            lines.append(f"{i}. {r['title']}")
+            lines.append(f"   {r['url']}")
+            if r.get("content"):
+                lines.append(f"   {r['content'][:300].strip()}...")
+            lines.append("")
+        return "\n".join(lines) if lines else "No results found."
+    except Exception as e:
+        return f"Search error: {e}"
+
+
 # ─── Family Registry ─────────────────────────────────────────
 FAMILY_MEMBERS = {
     "dad": {
@@ -151,6 +214,10 @@ Your character:
 
 You have a persistent memory system. You remember things the family tells you across
 conversations. When you recall relevant memories, weave them naturally into your responses.
+
+You have access to a web_search tool for current information — news, prices, weather,
+sports, research, anything beyond your training data. Use it proactively when a question
+would benefit from up-to-date information. Cite sources naturally in your response.
 
 Today's date is: {date}
 
@@ -206,7 +273,7 @@ def build_system_prompt(user_input: str, user_id: str = DEFAULT_USER) -> str:
 
 
 def chat(user_input: str, conversation_history: list, user_id: str = DEFAULT_USER) -> str:
-    """Send a message to Alfred and get a response."""
+    """Send a message to Alfred and get a response, handling tool use in a loop."""
     system = build_system_prompt(user_input, user_id)
 
     conversation_history.append({
@@ -214,24 +281,67 @@ def chat(user_input: str, conversation_history: list, user_id: str = DEFAULT_USE
         "content": user_input,
     })
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=4096,
-        system=system,
-        messages=conversation_history,
-    )
+    tools = [TAVILY_TOOL] if TAVILY_API_KEY else []
 
-    assistant_message = response.content[0].text
+    # Agentic loop — keeps going until Alfred returns a final text response
+    while True:
+        kwargs = dict(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system,
+            messages=conversation_history,
+        )
+        if tools:
+            kwargs["tools"] = tools
 
-    conversation_history.append({
-        "role": "assistant",
-        "content": assistant_message,
-    })
+        response = client.messages.create(**kwargs)
 
-    # Store the exchange in memory
-    store_memory(conversation_history[-2:], user_id)
+        if response.stop_reason == "tool_use":
+            # Append Alfred's tool-use turn to history
+            conversation_history.append({
+                "role": "assistant",
+                "content": response.content,
+            })
 
-    return assistant_message
+            # Execute each tool call and collect results
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    if block.name == "web_search":
+                        print(f"🔍 Searching: {block.input.get('query', '')}")
+                        result = web_search(
+                            query=block.input["query"],
+                            max_results=block.input.get("max_results", 5),
+                        )
+                    else:
+                        result = f"Unknown tool: {block.name}"
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+
+            # Feed results back to Alfred and loop
+            conversation_history.append({
+                "role": "user",
+                "content": tool_results,
+            })
+
+        else:
+            # Final text response
+            assistant_message = next(
+                (b.text for b in response.content if hasattr(b, "text")), ""
+            )
+            conversation_history.append({
+                "role": "assistant",
+                "content": assistant_message,
+            })
+
+            # Store the user input + final response in memory
+            store_memory(conversation_history[-2:], user_id)
+
+            return assistant_message
 
 
 # ─── Main Loop ────────────────────────────────────────────────
