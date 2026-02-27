@@ -65,6 +65,8 @@ QdrantStore.search = _patched_qdrant_search
 load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "dhwafD61uVd8h85wAZSE")
 
 if not ANTHROPIC_API_KEY:
     raise EnvironmentError("ANTHROPIC_API_KEY not found in .env")
@@ -182,6 +184,90 @@ def web_search(query: str, max_results: int = 5) -> str:
         return "\n".join(lines) if lines else "No results found."
     except Exception as e:
         return f"Search error: {e}"
+
+
+# ─── Voice: Text-to-Speech (ElevenLabs) ─────────────────────
+def speak(text: str) -> None:
+    """Convert text to speech via ElevenLabs and play it."""
+    if not ELEVENLABS_API_KEY:
+        return
+    try:
+        import urllib.request
+        import tempfile
+        import subprocess
+        import re
+
+        # Strip markdown formatting so it sounds natural spoken aloud
+        clean = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", text)  # bold/italic
+        clean = re.sub(r"`[^`]+`", "", clean)                    # inline code
+        clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)  # links
+        clean = re.sub(r"#{1,6}\s*", "", clean)                  # headings
+        clean = re.sub(r"\n{2,}", " ", clean).strip()
+
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+        payload = json.dumps({
+            "text": clean,
+            "model_id": "eleven_turbo_v2_5",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+        }).encode()
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "xi-api-key": ELEVENLABS_API_KEY,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            audio = resp.read()
+
+        # Write to temp file and play with Windows Media Player (no extra deps)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+            f.write(audio)
+            tmp_path = f.name
+
+        subprocess.run(
+            ["powershell", "-c", f'(New-Object Media.SoundPlayer).PlaySync()' ],
+            capture_output=True,
+        )
+        # Use Windows built-in to play mp3
+        subprocess.run(
+            ["powershell", "-c",
+             f'Add-Type -AssemblyName presentationCore; '
+             f'$mp = New-Object System.Windows.Media.MediaPlayer; '
+             f'$mp.Open("{tmp_path}"); '
+             f'$mp.Play(); '
+             f'Start-Sleep -Milliseconds ($mp.NaturalDuration.TimeSpan.TotalMilliseconds + 500); '
+             f'$mp.Close()'],
+            capture_output=True,
+        )
+        os.unlink(tmp_path)
+    except Exception as e:
+        print(f"⚠️  Voice output error: {e}")
+
+
+# ─── Voice: Speech-to-Text (Google via speech_recognition) ───
+def listen() -> str | None:
+    """Record from microphone and return transcribed text, or None on failure."""
+    try:
+        import speech_recognition as sr
+        r = sr.Recognizer()
+        with sr.Microphone() as source:
+            print("🎤 Listening... (speak now)")
+            r.adjust_for_ambient_noise(source, duration=0.5)
+            audio = r.listen(source, timeout=10, phrase_time_limit=30)
+        print("🔄 Transcribing...")
+        text = r.recognize_google(audio)
+        print(f"You (voice): {text}")
+        return text
+    except ImportError:
+        print("⚠️  speech_recognition not installed. Run: pip install SpeechRecognition pyaudio")
+        return None
+    except Exception as e:
+        print(f"⚠️  Voice input error: {e}")
+        return None
 
 
 # ─── Family Registry ─────────────────────────────────────────
@@ -350,11 +436,14 @@ def main():
     print("🎩 Alfred — Family AI Advisor")
     print("=" * 55)
     print("Type 'quit' to exit | 'memories' to view all memories")
+    print("Type 'voice on' / 'voice off' to toggle voice mode")
+    print("In voice mode, press Enter to speak instead of typing")
     print("=" * 55)
     print()
 
     conversation_history = []
     user_id = DEFAULT_USER
+    voice_mode = False  # toggled with 'voice on' / 'voice off'
 
     # Opening greeting
     greeting = chat(
@@ -363,24 +452,50 @@ def main():
         user_id,
     )
     print(f"Alfred: {greeting}\n")
+    if voice_mode:
+        speak(greeting)
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            if voice_mode:
+                input("[ Press Enter to speak, or type a command ] ")
+                user_input = listen()
+                if user_input is None:
+                    continue
+            else:
+                user_input = input("You: ").strip()
 
             if not user_input:
                 continue
 
-            if user_input.lower() == "quit":
-                print("\nAlfred: Very good, sir. Until next time. 🎩")
+            cmd = user_input.lower().strip()
+
+            if cmd == "quit":
+                farewell = "Very good, sir. Until next time. 🎩"
+                print(f"\nAlfred: {farewell}")
+                if voice_mode:
+                    speak(farewell)
                 break
 
-            if user_input.lower() == "memories":
+            if cmd == "voice on":
+                if not ELEVENLABS_API_KEY:
+                    print("⚠️  ELEVENLABS_API_KEY is not set — voice output unavailable.")
+                voice_mode = True
+                print("🔊 Voice mode ON  (speak after pressing Enter)")
+                continue
+
+            if cmd == "voice off":
+                voice_mode = False
+                print("🔇 Voice mode OFF")
+                continue
+
+            if cmd == "memories":
                 all_memories = memory.get_all(user_id=user_id)
                 print("\n📋 All stored memories:")
                 print("-" * 40)
-                if all_memories:
-                    for m in all_memories:
+                items = all_memories.get("results", []) if isinstance(all_memories, dict) else all_memories
+                if items:
+                    for m in items:
                         if isinstance(m, dict) and "memory" in m:
                             print(f"  - {m['memory']}")
                         else:
@@ -392,6 +507,8 @@ def main():
 
             response = chat(user_input, conversation_history, user_id)
             print(f"\nAlfred: {response}\n")
+            if voice_mode:
+                speak(response)
 
         except KeyboardInterrupt:
             print("\n\nAlfred: Very good, sir. Until next time. 🎩")
