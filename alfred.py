@@ -433,9 +433,9 @@ def main():
     print("=" * 55)
     print("🎩 Alfred — Family AI Advisor")
     print("=" * 55)
-    print("Type 'quit' to exit | 'memories' to view all memories")
-    print("Type 'voice on' / 'voice off' to toggle voice mode")
-    print("In voice mode, press Enter to speak instead of typing")
+    print("Type your message, or press Enter to speak")
+    print("'voice on' / 'voice off' to toggle spoken responses")
+    print("'quit' to exit  |  'memories' to view stored memories")
     print("=" * 55)
     print()
 
@@ -455,16 +455,15 @@ def main():
 
     while True:
         try:
-            if voice_mode:
-                input("[ Press Enter to speak, or type a command ] ")
+            typed = input("You (or Enter to speak): ").strip()
+
+            if not typed:
+                # Empty input — trigger microphone
                 user_input = listen()
                 if user_input is None:
                     continue
             else:
-                user_input = input("You: ").strip()
-
-            if not user_input:
-                continue
+                user_input = typed
 
             cmd = user_input.lower().strip()
 
@@ -479,12 +478,12 @@ def main():
                 if not ELEVENLABS_API_KEY:
                     print("⚠️  ELEVENLABS_API_KEY is not set — voice output unavailable.")
                 voice_mode = True
-                print("🔊 Voice mode ON  (speak after pressing Enter)")
+                print("🔊 Voice responses ON")
                 continue
 
             if cmd == "voice off":
                 voice_mode = False
-                print("🔇 Voice mode OFF")
+                print("🔇 Voice responses OFF")
                 continue
 
             if cmd == "memories":
