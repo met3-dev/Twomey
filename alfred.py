@@ -194,6 +194,7 @@ def speak(text: str) -> None:
         return
     try:
         import urllib.request
+        import urllib.error
         import tempfile
         import re
 
@@ -204,24 +205,31 @@ def speak(text: str) -> None:
         clean = re.sub(r"#{1,6}\s*", "", clean)                  # headings
         clean = re.sub(r"\n{2,}", " ", clean).strip()
 
+        # Truncate to ElevenLabs limit (5000 chars on free/starter tier)
+        clean = clean[:4500]
+
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
         payload = json.dumps({
             "text": clean,
             "model_id": "eleven_turbo_v2_5",
             "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
-        }).encode()
+        }, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             url,
             data=payload,
             headers={
                 "xi-api-key": ELEVENLABS_API_KEY,
-                "Content-Type": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
                 "Accept": "audio/mpeg",
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            audio = resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                audio = resp.read()
+        except urllib.error.HTTPError as http_err:
+            print(f"⚠️  ElevenLabs error {http_err.code}: {http_err.read().decode()}")
+            return
 
         # Write to temp file and play (blocks until done)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
