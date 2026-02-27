@@ -67,6 +67,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "dhwafD61uVd8h85wAZSE")
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", r"C:\ffmpeg\ffmpeg-8.0.1-essentials_build\bin\ffmpeg.exe")
 
 if not ANTHROPIC_API_KEY:
     raise EnvironmentError("ANTHROPIC_API_KEY not found in .env")
@@ -194,7 +195,6 @@ def speak(text: str) -> None:
     try:
         import urllib.request
         import tempfile
-        import subprocess
         import re
 
         # Strip markdown formatting so it sounds natural spoken aloud
@@ -223,26 +223,13 @@ def speak(text: str) -> None:
         with urllib.request.urlopen(req, timeout=30) as resp:
             audio = resp.read()
 
-        # Write to temp file and play with Windows Media Player (no extra deps)
+        # Write to temp file and play (blocks until done)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             f.write(audio)
             tmp_path = f.name
 
-        subprocess.run(
-            ["powershell", "-c", f'(New-Object Media.SoundPlayer).PlaySync()' ],
-            capture_output=True,
-        )
-        # Use Windows built-in to play mp3
-        subprocess.run(
-            ["powershell", "-c",
-             f'Add-Type -AssemblyName presentationCore; '
-             f'$mp = New-Object System.Windows.Media.MediaPlayer; '
-             f'$mp.Open("{tmp_path}"); '
-             f'$mp.Play(); '
-             f'Start-Sleep -Milliseconds ($mp.NaturalDuration.TimeSpan.TotalMilliseconds + 500); '
-             f'$mp.Close()'],
-            capture_output=True,
-        )
+        from playsound import playsound
+        playsound(tmp_path)
         os.unlink(tmp_path)
     except Exception as e:
         print(f"⚠️  Voice output error: {e}")
