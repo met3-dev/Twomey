@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from pathlib import Path
 from dotenv import load_dotenv
 from mem0 import Memory
