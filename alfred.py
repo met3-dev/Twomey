@@ -422,8 +422,14 @@ def chat(user_input: str, conversation_history: list, user_id: str = DEFAULT_USE
                 "content": assistant_message,
             })
 
-            # Store the user input + final response in memory
-            store_memory(conversation_history[-2:], user_id)
+            # Store the user input + final response in memory.
+            # Only pass plain text turns — skip tool_use/tool_result turns
+            # which have list content and confuse Mem0's vision parser.
+            text_turns = [
+                m for m in conversation_history
+                if isinstance(m.get("content"), str)
+            ]
+            store_memory(text_turns[-2:], user_id)
 
             return assistant_message
 
